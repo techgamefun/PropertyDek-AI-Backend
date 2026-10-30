@@ -1,6 +1,7 @@
 // server.js
 import "dotenv/config";
 import app from "./app.js";
+import prisma from "./src/config/prismaClient.js";
 
 const PORT = process.env.PORT || 3000;
 
@@ -18,10 +19,8 @@ const gracefulShutdown = (signal) => {
     console.log("HTTP server closed.");
 
     try {
-      // Step 3: Close database or third-party connections here
-      // e.g., await mongoose.connection.close();
-      // e.g., await redisClient.quit();
-      console.log("Database and external service connections closed.");
+      await prisma.$disconnect();
+      console.log("Database connection closed.");
 
       console.log("Graceful shutdown completed successfully.");
       process.exit(0); // Clean exit

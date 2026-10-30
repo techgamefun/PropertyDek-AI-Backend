@@ -8,9 +8,10 @@ notifications, and audit history.
 
 Set both `DATABASE_URL` (Supabase transaction pooler, port `6543`) and
 `DIRECT_URL` (Supabase session pooler, port `5432`) in the backend environment.
-Prisma CLI migrations use `DIRECT_URL`; replace `[YOUR-PASSWORD]` with the
-database password, URL-encoding reserved characters in the password. Create and
-apply a migration in a development database with:
+The Express runtime connects through Prisma's PostgreSQL driver adapter using
+`DATABASE_URL`; Prisma CLI migrations use `DIRECT_URL`. Replace
+`[YOUR-PASSWORD]` with the database password, URL-encoding reserved characters
+in the password. Create and apply a migration in a development database with:
 
 ```sh
 npx prisma migrate dev --name init
