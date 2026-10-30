@@ -1,16 +1,18 @@
 import { AuthServiceError } from "../services/authService.js";
+import { ApiError } from "../services/apiError.js";
 
 export function errorHandler(error, req, res, next) {
   if (res.headersSent) {
     return next(error);
   }
 
-  if (error instanceof AuthServiceError) {
+  if (error instanceof AuthServiceError || error instanceof ApiError) {
     return res.status(error.statusCode).json({
       success: false,
       error: {
         code: error.code,
         message: error.message,
+        ...(error.fields ? { fields: error.fields } : {}),
       },
     });
   }

@@ -7,12 +7,19 @@ datasource db {
 }
 
 model Organization {
-  id                  String               @id @default(uuid()) @db.Uuid
-  name                String               @db.VarChar(160)
-  slug                String               @unique @db.VarChar(100)
-  billingEmail        String?              @map("billing_email") @db.VarChar(320)
-  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                  String                 @id @default(uuid()) @db.Uuid
+  name                String                 @db.VarChar(160)
+  slug                String                 @unique @db.VarChar(100)
+  countryCode         String?                @map("country_code") @db.Char(2)
+  timezone            String?                @db.VarChar(100)
+  setupMethod         OnboardingSetupMethod? @map("setup_method")
+  onboardingCompleted Boolean                @default(false) @map("onboarding_completed")
+  teamStepCompletedAt DateTime?              @map("team_step_completed_at") @db.Timestamptz(6)
+  teamStepSkipped     Boolean                @default(false) @map("team_step_skipped")
+  demoDataCreatedAt   DateTime?              @map("demo_data_created_at") @db.Timestamptz(6)
+  billingEmail        String?                @map("billing_email") @db.VarChar(320)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
   aiAgents            AiAgent[]
   auditLogs           AuditLog[]
   conversations       Conversation[]
@@ -26,30 +33,50 @@ model Organization {
   properties          Property[]
   technicians         Technician[]
   tenants             Tenant[]
+  invitations         Invitation[]
+  imports             ImportJob[]
 
   @@map("organizations")
 }
 
 model User {
-  id                String               @id @default(uuid()) @db.Uuid
-  authProviderId    String?              @unique @map("auth_provider_id") @db.VarChar(255)
-  email             String               @unique @db.VarChar(320)
-  fullName          String               @map("full_name") @db.VarChar(160)
-  passwordHash      String?              @map("password_hash") @db.VarChar(255)
-  phone             String?              @db.VarChar(40)
-  avatarUrl         String?              @map("avatar_url") @db.VarChar(2048)
-  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
-  auditLogs         AuditLog[]
-  conversations     Conversation[]
-  uploadedDocuments Document[]           @relation("DocumentUploader")
-  authoredComments  MaintenanceComment[]
-  memberships       Membership[]
-  sentMessages      Message[]
-  notifications     Notification[]
-  technicians       Technician[]
+  id                  String               @id @default(uuid()) @db.Uuid
+  authProviderId      String?              @unique @map("auth_provider_id") @db.VarChar(255)
+  email               String               @unique @db.VarChar(320)
+  fullName            String               @map("full_name") @db.VarChar(160)
+  passwordHash        String?              @map("password_hash") @db.VarChar(255)
+  phone               String?              @db.VarChar(40)
+  avatarUrl           String?              @map("avatar_url") @db.VarChar(2048)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  auditLogs           AuditLog[]
+  conversations       Conversation[]
+  uploadedDocuments   Document[]           @relation("DocumentUploader")
+  authoredComments    MaintenanceComment[]
+  memberships         Membership[]
+  sentMessages        Message[]
+  notifications       Notification[]
+  technicians         Technician[]
+  sentInvitations     Invitation[]         @relation("InvitationSender")
+  acceptedInvitations Invitation[]         @relation("InvitationAccepter")
+  createdImports      ImportJob[]
+  authSessions        AuthSession[]
 
   @@map("users")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @unique @map("refresh_token_hash") @db.Char(64)
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@map("auth_sessions")
 }
 
 model Membership {
@@ -68,6 +95,44 @@ model Membership {
   @@unique([organizationId, userId])
   @@index([userId, status])
   @@map("memberships")
+}
+
+model Invitation {
+  id               String           @id @default(uuid()) @db.Uuid
+  organizationId   String           @map("organization_id") @db.Uuid
+  email            String           @db.VarChar(320)
+  role             MembershipRole
+  tokenHash        String           @unique @map("token_hash") @db.Char(64)
+  status           InvitationStatus @default(PENDING)
+  invitedByUserId  String           @map("invited_by_user_id") @db.Uuid
+  acceptedByUserId String?          @map("accepted_by_user_id") @db.Uuid
+  expiresAt        DateTime         @map("expires_at") @db.Timestamptz(6)
+  acceptedAt       DateTime?        @map("accepted_at") @db.Timestamptz(6)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy        User             @relation("InvitationSender", fields: [invitedByUserId], references: [id])
+  acceptedBy       User?            @relation("InvitationAccepter", fields: [acceptedByUserId], references: [id])
+
+  @@index([organizationId, status, createdAt])
+  @@index([email, status])
+  @@map("invitations")
+}
+
+model ImportJob {
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @map("organization_id") @db.Uuid
+  createdByUserId String       @map("created_by_user_id") @db.Uuid
+  fileName        String       @map("file_name") @db.VarChar(255)
+  status          ImportStatus @default(AWAITING_FILE)
+  result          Json?
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy       User         @relation(fields: [createdByUserId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@map("import_jobs")
 }
 
 model Property {
@@ -461,6 +526,33 @@ enum MembershipStatus {
   SUSPENDED
 
   @@map("membership_status")
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  CANCELED
+  EXPIRED
+
+  @@map("invitation_status")
+}
+
+enum ImportStatus {
+  AWAITING_FILE
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+
+  @@map("import_status")
+}
+
+enum OnboardingSetupMethod {
+  FRESH
+  IMPORT
+  DEMO
+
+  @@map("onboarding_setup_method")
 }
 
 enum PropertyType {

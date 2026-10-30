@@ -7,13 +7,14 @@ export function validateRegistration(req, res, next) {
 
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return sendValidationError(res, {
-      body: "A JSON object is required.",
+      body: "A valid registration form is required.",
     });
   }
 
   const fullName = typeof body.fullName === "string" ? body.fullName.trim() : "";
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
+  const phone = typeof body.phone === "string" ? body.phone.trim() : "";
 
   if (!fullName) {
     fields.fullName = "Full name is required.";
@@ -35,11 +36,17 @@ export function validateRegistration(req, res, next) {
     fields.password = "Password must be no more than 72 UTF-8 bytes.";
   }
 
+  if (body.phone !== undefined && typeof body.phone !== "string") {
+    fields.phone = "Phone number must be text.";
+  } else if (phone.length > 40) {
+    fields.phone = "Phone number must be 40 characters or fewer.";
+  }
+
   if (Object.keys(fields).length > 0) {
     return sendValidationError(res, fields);
   }
 
-  res.locals.registration = { fullName, email, password };
+  res.locals.registration = { fullName, email, password, phone: phone || null };
   return next();
 }
 

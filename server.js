@@ -3,7 +3,7 @@ import "dotenv/config";
 import app from "./app.js";
 import prisma from "./src/config/prismaClient.js";
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 // 1. Store the running server instance
 const server = app.listen(PORT, () => {

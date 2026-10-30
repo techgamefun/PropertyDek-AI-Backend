@@ -18,8 +18,8 @@ export function uploadImage(buffer) {
       (error, result) => {
         if (error) {
           reject(error);
-        } else if (!result) {
-          reject(new Error("Cloudinary returned no upload result."));
+        } else if (!result?.secure_url || !result.public_id) {
+          reject(new Error("Cloudinary returned an incomplete image upload result."));
         } else {
           resolve(result);
         }
@@ -28,4 +28,13 @@ export function uploadImage(buffer) {
 
     uploadStream.end(buffer);
   });
+}
+
+export function deleteImage(publicId) {
+  if (typeof publicId !== "string" || publicId.length === 0) {
+    throw new TypeError("deleteImage requires a Cloudinary public ID.");
+  }
+
+  const cloudinary = getCloudinaryClient();
+  return cloudinary.uploader.destroy(publicId, { resource_type: "image" });
 }

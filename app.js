@@ -1,6 +1,7 @@
 // app.js
 import express from "express";
 import authRoutes from "./src/routes/authRoutes.js";
+import apiRoutes from "./src/routes/apiRoutes.js";
 import { checkDatabaseHealth } from "./src/controllers/healthController.js";
 import { errorHandler } from "./src/middleware/errorHandler.js";
 
@@ -11,6 +12,7 @@ app.use(express.json());
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/v1", apiRoutes);
 
 app.get("/", (req, res) => {
   res.send("Hello, Express and Git with separated app and server!");
