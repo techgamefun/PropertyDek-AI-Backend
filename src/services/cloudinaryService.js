@@ -39,6 +39,37 @@ export function deleteImage(publicId) {
   return cloudinary.uploader.destroy(publicId, { resource_type: "image" });
 }
 
+export function getCloudinaryImagePublicId(imageUrl) {
+  if (typeof imageUrl !== "string" || !imageUrl) {
+    return null;
+  }
+
+  let url;
+  try {
+    url = new URL(imageUrl);
+  } catch {
+    return null;
+  }
+
+  if (url.hostname !== "res.cloudinary.com") {
+    return null;
+  }
+
+  const uploadPath = "/image/upload/";
+  const uploadIndex = url.pathname.indexOf(uploadPath);
+  if (uploadIndex === -1) {
+    return null;
+  }
+
+  const path = url.pathname.slice(uploadIndex + uploadPath.length);
+  const segments = path.split("/");
+  if (segments[0]?.startsWith("v") && /^v\d+$/u.test(segments[0])) {
+    segments.shift();
+  }
+  const publicId = segments.join("/").replace(/\.[^/.]+$/u, "");
+  return publicId || null;
+}
+
 export function uploadPrivateDocument(buffer, fileName) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     throw new TypeError("uploadPrivateDocument requires a non-empty buffer.");

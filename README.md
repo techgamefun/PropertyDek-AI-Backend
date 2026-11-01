@@ -52,11 +52,37 @@ npx prisma migrate deploy
 npx prisma generate
 ```
 
+## Test fixtures
+
+After applying migrations and generating the Prisma Client, seed a repeatable
+test portfolio for the existing user
+`36fcbdfa-1636-40cc-a39a-5bc21d30fa9e`:
+
+```sh
+npm run seed
+```
+
+The command creates or updates a clearly named test organization and its owner
+membership, then adds sample properties, units, tenants, leases, invoices,
+payments, maintenance requests, technicians, assignments, comments,
+notifications, an AI conversation, and import/audit records. It does not create
+another user or delete existing data. Fixture IDs and the organization slug are
+stable, so rerunning the command updates the same fixture records. The test
+email addresses use the reserved `.test` domain. If the database is missing the
+invoice `currency` column, invoices and payments are skipped and the command
+reports that limitation; apply the invoice-currency migration before rerunning
+to seed those records.
+
 Registration accepts `fullName`, `email`, and `password`, plus an optional
 `phone` and `avatar` file as `multipart/form-data`. Profile photos must be JPG,
 PNG, or WebP and no larger than 5 MB. The backend uploads selected photos to
 Cloudinary and returns the resulting `avatarUrl` in the user profile; clients
 must not supply an arbitrary avatar URL.
+
+Authenticated account settings use `GET /api/v1/users/me` and `PATCH
+/api/v1/users/me` to read or update the user's name, phone, and optional `avatar`
+upload. `DELETE /api/v1/users/me/avatar` removes the current photo. Image
+uploads use the same JPG, PNG, or WebP and 5 MB limits as registration.
 
 Google sign-in uses a server-side OAuth authorization-code flow with PKCE and
 the same HttpOnly session cookies as email/password sign-in. Configure
@@ -145,10 +171,13 @@ The authenticated tenant API is mounted under `/api/v1`:
 - `GET /tenants` lists tenants in the current workspace; the optional `search`
   parameter searches names, email addresses, and phone numbers.
 - `POST /tenants` creates a tenant with `fullName` and optional `email`,
-  `phone`, `emergencyContact`, `emergencyPhone`, and `notes`.
+  `phone`, `emergencyContact`, `emergencyPhone`, and `notes`. It may also
+  include an `avatar` image file as multipart form data.
 - `GET /tenants/:tenantId` retrieves the tenant profile, lease history, and
   maintenance history.
-- `PATCH /tenants/:tenantId` updates one or more tenant profile fields.
+- `PATCH /tenants/:tenantId` updates one or more tenant profile fields, accepts
+  a replacement `avatar` image file, or clears the photo with
+  `{ "removeAvatar": true }`.
 - `DELETE /tenants/:tenantId` deletes a tenant only when they have no lease
   history. Maintenance records retain their history with the tenant association
   cleared.
@@ -156,6 +185,7 @@ The authenticated tenant API is mounted under `/api/v1`:
 Tenant records are scoped to the current workspace. Owners, admins, and
 property managers can create, edit, and delete tenants; all workspace members
 can view them. Lease history is retained and prevents tenant deletion.
+Tenant photos use Cloudinary and are returned as `avatarUrl`.
 
 ## Lease management
 

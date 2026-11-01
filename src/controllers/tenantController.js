@@ -9,6 +9,11 @@ import {
   requireObject,
   requireString,
 } from "../services/requestValidation.js";
+import {
+  deleteImage,
+  getCloudinaryImagePublicId,
+  uploadImage,
+} from "../services/cloudinaryService.js";
 
 const TENANT_WRITERS = ["OWNER", "ADMIN", "PROPERTY_MANAGER"];
 const TENANT_FIELDS = {
@@ -88,7 +93,18 @@ export async function createTenant(req, res) {
     ...mapTenantFields(body),
   };
   validateEmail(data.email);
-  const tenant = await prisma.tenant.create({ data });
+  const uploadedAvatar = req.file ? await uploadImage(req.file.buffer) : null;
+  if (uploadedAvatar) {
+    data.avatarUrl = uploadedAvatar.secure_url;
+  }
+
+  let tenant;
+  try {
+    tenant = await prisma.tenant.create({ data });
+  } catch (error) {
+    await removeUploadedAvatar(uploadedAvatar);
+    throw error;
+  }
   return res.status(201).json({ success: true, data: { tenant } });
 }
 
@@ -97,18 +113,46 @@ export async function updateTenant(req, res) {
   ensureCanWrite(membership.role);
   const tenantId = requireUuid(req.params.tenantId, "tenantId");
   const body = requireObject(req.body);
+  const removeAvatar = body.removeAvatar === true;
+  if (body.removeAvatar !== undefined && !removeAvatar) {
+    throw new ApiError("VALIDATION_ERROR", 400, "removeAvatar must be true when provided.");
+  }
   const data = {};
   if (body.fullName !== undefined) {
     data.fullName = requireString(body.fullName, "fullName", 160);
   }
   Object.assign(data, mapTenantFields(body));
-  if (Object.keys(data).length === 0) {
+  if (removeAvatar && !req.file) {
+    data.avatarUrl = null;
+  }
+  if (Object.keys(data).length === 0 && !req.file) {
     throw new ApiError("VALIDATION_ERROR", 400, "At least one tenant field is required.");
+  }
+  if (req.file && removeAvatar) {
+    throw new ApiError(
+      "VALIDATION_ERROR",
+      400,
+      "Choose a new photo or remove the current photo, not both.",
+    );
   }
   validateEmail(data.email);
 
-  await requireScopedTenant(tenantId, membership.organizationId);
-  const tenant = await prisma.tenant.update({ where: { id: tenantId }, data });
+  const existingTenant = await requireScopedTenant(tenantId, membership.organizationId);
+  const uploadedAvatar = req.file ? await uploadImage(req.file.buffer) : null;
+  if (uploadedAvatar) {
+    data.avatarUrl = uploadedAvatar.secure_url;
+  }
+
+  let tenant;
+  try {
+    tenant = await prisma.tenant.update({ where: { id: tenantId }, data });
+  } catch (error) {
+    await removeUploadedAvatar(uploadedAvatar);
+    throw error;
+  }
+  if (uploadedAvatar || removeAvatar) {
+    await removePreviousAvatar(existingTenant.avatarUrl);
+  }
   return res.json({ success: true, data: { tenant } });
 }
 
@@ -116,12 +160,13 @@ export async function deleteTenant(req, res) {
   const membership = await requireCurrentMembership(req.authUserId);
   ensureCanWrite(membership.role);
   const tenantId = requireUuid(req.params.tenantId, "tenantId");
+  let avatarUrl;
 
   try {
     await prisma.$transaction(async (transaction) => {
       const tenant = await transaction.tenant.findFirst({
         where: { id: tenantId, organizationId: membership.organizationId },
-        select: { id: true, _count: { select: { leases: true } } },
+        select: { id: true, avatarUrl: true, _count: { select: { leases: true } } },
       });
       if (!tenant) {
         throw new ApiError("TENANT_NOT_FOUND", 404, "Tenant not found.");
@@ -133,6 +178,7 @@ export async function deleteTenant(req, res) {
           "Tenants with lease history cannot be deleted.",
         );
       }
+      avatarUrl = tenant.avatarUrl;
       await transaction.tenant.delete({ where: { id: tenantId } });
     });
   } catch (error) {
@@ -146,6 +192,7 @@ export async function deleteTenant(req, res) {
     throw error;
   }
 
+  await removePreviousAvatar(avatarUrl);
   return res.json({ success: true, data: { deleted: true } });
 }
 
@@ -171,12 +218,35 @@ function validateEmail(email) {
 async function requireScopedTenant(tenantId, organizationId) {
   const tenant = await prisma.tenant.findFirst({
     where: { id: tenantId, organizationId },
-    select: { id: true },
+    select: { id: true, avatarUrl: true },
   });
   if (!tenant) {
     throw new ApiError("TENANT_NOT_FOUND", 404, "Tenant not found.");
   }
   return tenant;
+}
+
+async function removeUploadedAvatar(avatar) {
+  if (!avatar?.public_id) {
+    return;
+  }
+  try {
+    await deleteImage(avatar.public_id);
+  } catch (error) {
+    console.error("Failed to remove an unused Cloudinary tenant photo:", error);
+  }
+}
+
+async function removePreviousAvatar(avatarUrl) {
+  const publicId = getCloudinaryImagePublicId(avatarUrl);
+  if (!publicId) {
+    return;
+  }
+  try {
+    await deleteImage(publicId);
+  } catch (error) {
+    console.error("Failed to remove an unused Cloudinary tenant photo:", error);
+  }
 }
 
 function ensureCanWrite(role) {

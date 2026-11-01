@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   tenantUpdate: vi.fn(),
   tenantDelete: vi.fn(),
   transaction: vi.fn(),
+  uploadImage: vi.fn(),
+  deleteImage: vi.fn(),
+  getCloudinaryImagePublicId: vi.fn(),
 }));
 
 vi.mock("../config/prismaClient.js", () => ({
@@ -20,6 +23,12 @@ vi.mock("../config/prismaClient.js", () => ({
     },
     $transaction: mocks.transaction,
   },
+}));
+
+vi.mock("../services/cloudinaryService.js", () => ({
+  deleteImage: mocks.deleteImage,
+  getCloudinaryImagePublicId: mocks.getCloudinaryImagePublicId,
+  uploadImage: mocks.uploadImage,
 }));
 
 vi.mock("../services/organizationAccess.js", () => ({
@@ -47,6 +56,12 @@ describe("tenantController", () => {
     mocks.tenantCreate.mockImplementation(async ({ data }) => ({ id: "tenant-123", ...data }));
     mocks.tenantUpdate.mockImplementation(async ({ data }) => ({ id: "tenant-123", ...data }));
     mocks.tenantDelete.mockResolvedValue({ id: "tenant-123" });
+    mocks.uploadImage.mockResolvedValue({
+      secure_url: "https://res.cloudinary.com/demo/image/upload/tenant.jpg",
+      public_id: "propertydek/tenant",
+    });
+    mocks.getCloudinaryImagePublicId.mockReturnValue(null);
+    mocks.deleteImage.mockResolvedValue({});
     mocks.transaction.mockImplementation(async (operation) =>
       operation({
         tenant: {
@@ -147,12 +162,56 @@ describe("tenantController", () => {
     );
     expect(mocks.tenantFindFirst).toHaveBeenCalledWith({
       where: { id: "tenant-123", organizationId: "org-123" },
-      select: { id: true },
+      select: { id: true, avatarUrl: true },
     });
+
     expect(mocks.tenantUpdate).toHaveBeenCalledWith({
       where: { id: "tenant-123" },
       data: { phone: "555-0110", emergencyPhone: null },
     });
+  });
+
+  it("stores an uploaded tenant photo", async () => {
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn().mockReturnThis() };
+    await createTenant(
+      {
+        authUserId: "user-123",
+        body: { fullName: "Jordan Lee" },
+        file: { buffer: Buffer.from("photo") },
+      },
+      res,
+    );
+
+    expect(mocks.tenantCreate).toHaveBeenCalledWith({
+      data: {
+        organizationId: "org-123",
+        fullName: "Jordan Lee",
+        avatarUrl: "https://res.cloudinary.com/demo/image/upload/tenant.jpg",
+      },
+    });
+  });
+
+  it("removes a tenant photo when requested", async () => {
+    mocks.tenantFindFirst.mockResolvedValue({
+      id: "tenant-123",
+      avatarUrl: "https://res.cloudinary.com/demo/image/upload/tenant.jpg",
+    });
+    mocks.getCloudinaryImagePublicId.mockReturnValue("propertydek/tenant");
+    const res = { json: vi.fn().mockReturnThis() };
+    await updateTenant(
+      {
+        authUserId: "user-123",
+        params: { tenantId: "tenant-123" },
+        body: { removeAvatar: true },
+      },
+      res,
+    );
+
+    expect(mocks.tenantUpdate).toHaveBeenCalledWith({
+      where: { id: "tenant-123" },
+      data: { avatarUrl: null },
+    });
+    expect(mocks.deleteImage).toHaveBeenCalledWith("propertydek/tenant");
   });
 
   it("deletes tenants without leases and protects tenant lease history", async () => {

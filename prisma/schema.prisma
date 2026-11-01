@@ -189,6 +189,7 @@ model Tenant {
   fullName            String               @map("full_name") @db.VarChar(160)
   email               String?              @db.VarChar(320)
   phone               String?              @db.VarChar(40)
+  avatarUrl           String?               @map("avatar_url") @db.VarChar(2048)
   emergencyContact    String?              @map("emergency_contact") @db.VarChar(160)
   emergencyPhone      String?              @map("emergency_phone") @db.VarChar(40)
   notes               String?
