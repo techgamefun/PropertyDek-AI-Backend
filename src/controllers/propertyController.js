@@ -1,3 +1,4 @@
+import { extname } from "node:path";
 import prisma from "../config/prismaClient.js";
 import { ApiError } from "../services/apiError.js";
 import {
@@ -11,10 +12,37 @@ import {
   requireObject,
   requireString,
 } from "../services/requestValidation.js";
+import {
+  deletePrivateDocument,
+  getPrivateDocumentDownloadUrl,
+  uploadPrivateDocument,
+} from "../services/cloudinaryService.js";
 
 const PROPERTY_WRITERS = ["OWNER", "ADMIN", "PROPERTY_MANAGER"];
 const PROPERTY_TYPES = ["APARTMENT", "HOUSE", "CONDO", "COMMERCIAL", "OTHER"];
 const UNIT_STATUSES = ["AVAILABLE", "OCCUPIED", "RESERVED", "MAINTENANCE", "INACTIVE"];
+const PROPERTY_DOCUMENT_SELECT = {
+  id: true,
+  name: true,
+  mimeType: true,
+  sizeBytes: true,
+  createdAt: true,
+  uploadedBy: { select: { id: true, fullName: true } },
+};
+
+function normalizeFileName(fileName) {
+  return fileName.replace(/[\\/]/gu, "_").slice(0, 255);
+}
+
+function serializePropertyDocument(document) {
+  return {
+    ...document,
+    sizeBytes:
+      document.sizeBytes === null || document.sizeBytes === undefined
+        ? document.sizeBytes
+        : document.sizeBytes.toString(),
+  };
+}
 
 export async function createProperty(req, res) {
   const membership = await requireCurrentMembership(req.authUserId);
@@ -76,12 +104,135 @@ export async function getProperty(req, res) {
       id: propertyId,
       organizationId: membership.organizationId,
     },
-    include: { units: { orderBy: { unitNumber: "asc" } } },
+    include: {
+      units: { orderBy: { unitNumber: "asc" } },
+      documents: {
+        select: PROPERTY_DOCUMENT_SELECT,
+        orderBy: { createdAt: "desc" },
+      },
+    },
   });
   if (!property) {
     throw new ApiError("PROPERTY_NOT_FOUND", 404, "Property not found.");
   }
-  return res.json({ success: true, data: { property } });
+  return res.json({
+    success: true,
+    data: {
+      property: {
+        ...property,
+        documents: property.documents.map(serializePropertyDocument),
+      },
+    },
+  });
+}
+
+export async function uploadPropertyDocument(req, res) {
+  const membership = await requireCurrentMembership(req.authUserId);
+  ensureCanWrite(membership.role);
+  const propertyId = requireUuid(req.params.propertyId, "propertyId");
+  if (!req.file) {
+    throw new ApiError("DOCUMENT_REQUIRED", 400, "Choose a document to upload.");
+  }
+  const fileExtension = extname(req.file.originalname).slice(1).toLowerCase();
+  const allowedExtensionsByMimeType = {
+    "application/pdf": ["pdf"],
+    "application/msword": ["doc"],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [
+      "docx",
+    ],
+    "image/jpeg": ["jpg", "jpeg"],
+    "image/png": ["png"],
+  };
+  if (
+    !/^[a-z0-9]{1,10}$/u.test(fileExtension) ||
+    !/^[\w.+-]+\/[\w.+-]+$/u.test(req.file.mimetype) ||
+    (allowedExtensionsByMimeType[req.file.mimetype] &&
+      !allowedExtensionsByMimeType[req.file.mimetype].includes(fileExtension))
+  ) {
+    throw new ApiError(
+      "INVALID_DOCUMENT_TYPE",
+      400,
+      "The document filename extension must match its file type.",
+    );
+  }
+
+  const property = await prisma.property.findFirst({
+    where: { id: propertyId, organizationId: membership.organizationId },
+    select: { id: true },
+  });
+  if (!property) {
+    throw new ApiError("PROPERTY_NOT_FOUND", 404, "Property not found.");
+  }
+
+  const uploaded = await uploadPrivateDocument(req.file.buffer, req.file.originalname);
+  try {
+    const document = await prisma.document.create({
+      data: {
+        organizationId: membership.organizationId,
+        uploadedById: req.authUserId,
+        propertyId,
+        name: normalizeFileName(req.file.originalname),
+        storagePath: uploaded.public_id,
+        mimeType: req.file.mimetype,
+        sizeBytes: req.file.size,
+      },
+      select: PROPERTY_DOCUMENT_SELECT,
+    });
+    return res.status(201).json({
+      success: true,
+      data: { document: serializePropertyDocument(document) },
+    });
+  } catch (error) {
+    try {
+      await deletePrivateDocument(uploaded.public_id);
+    } catch (cleanupError) {
+      console.error("Failed to remove an unrecorded property document:", cleanupError);
+    }
+    throw error;
+  }
+}
+
+export async function downloadPropertyDocument(req, res) {
+  const membership = await requireCurrentMembership(req.authUserId);
+  const propertyId = requireUuid(req.params.propertyId, "propertyId");
+  const documentId = requireUuid(req.params.documentId, "documentId");
+  const document = await prisma.document.findFirst({
+    where: {
+      id: documentId,
+      propertyId,
+      organizationId: membership.organizationId,
+    },
+    select: { storagePath: true, name: true },
+  });
+  if (!document) {
+    throw new ApiError("DOCUMENT_NOT_FOUND", 404, "Property document not found.");
+  }
+  const downloadUrl = getPrivateDocumentDownloadUrl(
+    document.storagePath,
+    extname(document.name).slice(1).toLowerCase(),
+  );
+  return res.json({ success: true, data: { downloadUrl } });
+}
+
+export async function deletePropertyDocument(req, res) {
+  const membership = await requireCurrentMembership(req.authUserId);
+  ensureCanWrite(membership.role);
+  const propertyId = requireUuid(req.params.propertyId, "propertyId");
+  const documentId = requireUuid(req.params.documentId, "documentId");
+  const document = await prisma.document.findFirst({
+    where: {
+      id: documentId,
+      propertyId,
+      organizationId: membership.organizationId,
+    },
+    select: { id: true, storagePath: true },
+  });
+  if (!document) {
+    throw new ApiError("DOCUMENT_NOT_FOUND", 404, "Property document not found.");
+  }
+  await deletePrivateDocument(document.storagePath);
+  await prisma.document.delete({ where: { id: document.id } });
+  return res.json({ success: true, data: { deleted: true } });
 }
 
 export async function updateProperty(req, res) {

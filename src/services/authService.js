@@ -88,6 +88,107 @@ export async function loginUser({ email, password }) {
   };
 }
 
+export async function loginWithGoogle({
+  googleId,
+  email,
+  fullName,
+  avatarUrl,
+}) {
+  const secret = getJwtSecret();
+  const userSelect = {
+    id: true,
+    authProviderId: true,
+    email: true,
+    fullName: true,
+    phone: true,
+    avatarUrl: true,
+    createdAt: true,
+  };
+  let user = await prisma.user.findUnique({
+    where: { authProviderId: googleId },
+    select: userSelect,
+  });
+
+  if (user) {
+    if (user.email !== email) {
+      const emailOwner = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      if (emailOwner && emailOwner.id !== user.id) {
+        throw googleAccountConflict();
+      }
+
+      try {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { email },
+          select: userSelect,
+        });
+      } catch (error) {
+        if (error?.code === "P2002") {
+          throw googleAccountConflict();
+        }
+        throw error;
+      }
+    }
+  } else {
+    user = await prisma.user.findUnique({
+      where: { email },
+      select: userSelect,
+    });
+  }
+
+  if (user) {
+    if (user.authProviderId && user.authProviderId !== googleId) {
+      throw googleAccountConflict();
+    }
+
+    if (!user.authProviderId) {
+      try {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            authProviderId: googleId,
+            ...(user.avatarUrl || !avatarUrl ? {} : { avatarUrl }),
+          },
+          select: userSelect,
+        });
+      } catch (error) {
+        if (error?.code === "P2002") {
+          throw googleAccountConflict();
+        }
+        throw error;
+      }
+    }
+  } else {
+    try {
+      user = await prisma.user.create({
+        data: { authProviderId: googleId, email, fullName, avatarUrl },
+        select: userSelect,
+      });
+    } catch (error) {
+      if (error?.code !== "P2002") {
+        throw error;
+      }
+
+      user = await prisma.user.findUnique({
+        where: { email },
+        select: userSelect,
+      });
+      if (!user || user.authProviderId !== googleId) {
+        throw googleAccountConflict();
+      }
+    }
+  }
+
+  const { authProviderId, ...safeUser } = user;
+  return {
+    user: safeUser,
+    tokens: await createSessionTokens(safeUser, secret),
+  };
+}
+
 export async function refreshSession(refreshToken) {
   if (typeof refreshToken !== "string" || !refreshToken) {
     throw invalidRefreshToken();
@@ -172,5 +273,13 @@ function invalidRefreshToken() {
     "INVALID_REFRESH_TOKEN",
     401,
     "Your session has expired. Please sign in again.",
+  );
+}
+
+function googleAccountConflict() {
+  return new AuthServiceError(
+    "GOOGLE_ACCOUNT_CONFLICT",
+    409,
+    "This email is already connected to a different sign-in account.",
   );
 }

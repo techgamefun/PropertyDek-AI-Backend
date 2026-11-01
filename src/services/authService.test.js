@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   hash: vi.fn(),
   sign: vi.fn(),
+  update: vi.fn(),
 }));
 
 vi.mock("bcrypt", () => ({
@@ -29,6 +30,7 @@ vi.mock("../config/prismaClient.js", () => ({
     user: {
       create: mocks.create,
       findUnique: mocks.findUnique,
+      update: mocks.update,
     },
     authSession: {
       create: mocks.authSessionCreate,
@@ -41,6 +43,7 @@ vi.mock("../config/prismaClient.js", () => ({
 import {
   AuthServiceError,
   loginUser,
+  loginWithGoogle,
   logoutSession,
   refreshSession,
   registerUser,
@@ -158,6 +161,131 @@ describe("loginUser", () => {
       createHash("sha256").update(result.tokens.refreshToken).digest("hex"),
     );
     expect(storedSession.data.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("creates an account and session for a verified Google identity", async () => {
+    mocks.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mocks.create.mockResolvedValue({
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+      createdAt: user.createdAt,
+      authProviderId: "google-sub-123",
+    });
+
+    const result = await loginWithGoogle({
+      googleId: "google-sub-123",
+      email: user.email,
+      fullName: user.fullName,
+      avatarUrl: "https://lh3.googleusercontent.com/avatar",
+    });
+
+    expect(mocks.create).toHaveBeenCalledWith({
+      data: {
+        authProviderId: "google-sub-123",
+        email: user.email,
+        fullName: user.fullName,
+        avatarUrl: "https://lh3.googleusercontent.com/avatar",
+      },
+      select: expect.objectContaining({ authProviderId: true }),
+    });
+    expect(result.user).not.toHaveProperty("authProviderId");
+    expect(result.user).not.toHaveProperty("passwordHash");
+    expect(result.tokens).toEqual({
+      accessToken: "signed-session-token",
+      refreshToken: expect.any(String),
+    });
+  });
+
+  it("links an existing password account by verified email", async () => {
+    mocks.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        ...user,
+        authProviderId: null,
+      });
+    mocks.update.mockResolvedValue({
+      ...user,
+      authProviderId: "google-sub-123",
+    });
+
+    const result = await loginWithGoogle({
+      googleId: "google-sub-123",
+      email: user.email,
+      fullName: "Updated Google Name",
+      avatarUrl: "https://lh3.googleusercontent.com/avatar",
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: user.id },
+      data: {
+        authProviderId: "google-sub-123",
+        avatarUrl: "https://lh3.googleusercontent.com/avatar",
+      },
+      select: expect.objectContaining({ authProviderId: true }),
+    });
+    expect(result.user.fullName).toBe(user.fullName);
+  });
+
+  it("rejects a Google identity already linked to a different account", async () => {
+    mocks.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        ...user,
+        authProviderId: "different-google-sub",
+      });
+
+    await expect(
+      loginWithGoogle({
+        googleId: "google-sub-123",
+        email: user.email,
+        fullName: user.fullName,
+        avatarUrl: null,
+      }),
+    ).rejects.toMatchObject({
+      code: "GOOGLE_ACCOUNT_CONFLICT",
+      statusCode: 409,
+    });
+    expect(mocks.authSessionCreate).not.toHaveBeenCalled();
+  });
+
+  it("uses the stable Google ID when the verified email changes", async () => {
+    mocks.findUnique.mockResolvedValueOnce({
+      id: user.id,
+      authProviderId: "google-sub-123",
+      email: "old@example.com",
+      fullName: user.fullName,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+      createdAt: user.createdAt,
+    });
+    mocks.findUnique.mockResolvedValueOnce(null);
+    mocks.update.mockResolvedValue({
+      id: user.id,
+      authProviderId: "google-sub-123",
+      email: "new@example.com",
+      fullName: user.fullName,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+      createdAt: user.createdAt,
+    });
+
+    const result = await loginWithGoogle({
+      googleId: "google-sub-123",
+      email: "new@example.com",
+      fullName: user.fullName,
+      avatarUrl: null,
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: user.id },
+        data: { email: "new@example.com" },
+      }),
+    );
+    expect(result.user.email).toBe("new@example.com");
   });
 
   it("issues a new access token for a valid refresh token", async () => {

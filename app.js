@@ -1,5 +1,6 @@
 // app.js
 import express from "express";
+import { googleCallback } from "./src/controllers/authController.js";
 import authRoutes from "./src/routes/authRoutes.js";
 import apiRoutes from "./src/routes/apiRoutes.js";
 import { checkDatabaseHealth } from "./src/controllers/healthController.js";
@@ -12,6 +13,7 @@ app.use(express.json());
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.get("/auth/google/callback", googleCallback);
 app.use("/api/v1", apiRoutes);
 
 app.get("/", (req, res) => {

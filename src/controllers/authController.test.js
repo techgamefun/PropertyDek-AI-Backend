@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     }
   },
   loginUser: vi.fn(),
+  loginWithGoogle: vi.fn(),
   logoutSession: vi.fn(),
   refreshSession: vi.fn(),
   registerUser: vi.fn(),
@@ -22,11 +23,18 @@ vi.mock("../services/authService.js", () => ({
   logoutSession: mocks.logoutSession,
   refreshSession: mocks.refreshSession,
   registerUser: mocks.registerUser,
+  loginWithGoogle: mocks.loginWithGoogle,
 }));
 
 vi.mock("../services/cloudinaryService.js", () => ({
   uploadImage: mocks.uploadImage,
   deleteImage: mocks.deleteImage,
+}));
+
+vi.mock("../services/googleOAuthService.js", () => ({
+  createGoogleAuthorizationUrl: vi.fn(() => "https://accounts.google.test/auth"),
+  exchangeGoogleCode: vi.fn(),
+  getGoogleFrontendOrigin: vi.fn(() => "http://localhost:3000"),
 }));
 
 import { login, logout, refresh, register } from "./authController.js";
@@ -179,6 +187,94 @@ describe("login controller", () => {
       success: true,
       data: { user },
     });
+  });
+
+  it("redirects to Google and stores state and PKCE verifier in a protected cookie", async () => {
+    const res = {
+      cookie: vi.fn(),
+      redirect: vi.fn(),
+    };
+
+    const { googleLogin } = await import("./authController.js");
+    googleLogin({}, res);
+
+    expect(res.cookie).toHaveBeenCalledWith(
+      "propertydek_google_state",
+      expect.stringMatching(/^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/u),
+      expect.objectContaining({
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 600_000,
+      }),
+    );
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://accounts.google.test/auth",
+    );
+  });
+
+  it("exchanges a valid Google callback for the app's HttpOnly session", async () => {
+    const profile = {
+      googleId: "google-sub-123",
+      email: "samir@example.com",
+      fullName: "Samir",
+      avatarUrl: null,
+    };
+    const user = { id: "user-123", email: profile.email, fullName: "Samir" };
+    const { exchangeGoogleCode } = await import("../services/googleOAuthService.js");
+    exchangeGoogleCode.mockResolvedValue(profile);
+    mocks.loginWithGoogle.mockResolvedValue({
+      user,
+      tokens: { accessToken: "access-token", refreshToken: "refresh-token" },
+    });
+    const state = "a".repeat(43);
+    const verifier = "b".repeat(43);
+    const res = {
+      clearCookie: vi.fn(),
+      cookie: vi.fn(),
+      redirect: vi.fn(),
+    };
+
+    const { googleCallback } = await import("./authController.js");
+    await googleCallback(
+      {
+        headers: { cookie: `propertydek_google_state=${state}.${verifier}` },
+        query: { state, code: "authorization-code" },
+      },
+      res,
+    );
+
+    expect(exchangeGoogleCode).toHaveBeenCalledWith(
+      "authorization-code",
+      verifier,
+    );
+    expect(mocks.loginWithGoogle).toHaveBeenCalledWith(profile);
+    expect(res.cookie).toHaveBeenCalledTimes(2);
+    expect(res.redirect).toHaveBeenCalledWith(
+      303,
+      "http://localhost:3000/onboarding",
+    );
+  });
+
+  it("rejects a Google callback with an invalid state", async () => {
+    const { exchangeGoogleCode } = await import("../services/googleOAuthService.js");
+    const { googleCallback } = await import("./authController.js");
+    const res = { clearCookie: vi.fn(), redirect: vi.fn() };
+
+    await googleCallback(
+      {
+        headers: { cookie: "propertydek_google_state=expected.verifier" },
+        query: { state: "attacker", code: "authorization-code" },
+      },
+      res,
+    );
+
+    expect(exchangeGoogleCode).not.toHaveBeenCalled();
+    expect(res.redirect).toHaveBeenCalledWith(
+      303,
+      "http://localhost:3000/login?oauthError=google",
+    );
   });
 });
 
